@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CityU BOC Complex - Earthquake Survival Game</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; overflow:hidden; font-family:system-ui, sans-serif; background:#0f172a; color:#e2e8f0; }
+    #ui {
+      position:absolute; top:12px; left:12px; width:380px; padding:16px; background:rgba(15,23,42,0.85);
+      border-radius:10px; backdrop-filter:blur(6px); z-index:10; box-shadow:0 4px 25px rgba(0,0,0,0.5);
+    }
+    h1 { color:#60a5fa; margin:0 0 12px; font-size:1.35rem; }
+    button {
+      padding:8px 10px; margin:3px; width:calc(50% - 6px); border:none; border-radius:6px;
+      background:#3b82f6; color:white; cursor:pointer; font-size:13.5px;
+    }
+    button:hover:not(:disabled) { background:#2563eb; }
+    #location-buttons { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin:12px 0; }
+    #status { margin-top:12px; font-size:14px; line-height:1.5; white-space:pre-wrap; color:#cbd5e1; }
+    #loading {
+      position:fixed; inset:0; background:#0f172a; color:#60a5fa; display:flex;
+      align-items:center; justify-content:center; font-size:1.6rem; z-index:20;
+    }
+    #password-screen {
+      position:fixed; inset:0; background:#0f172a; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; z-index:100; color:white;
+    }
+    #password-input {
+      padding:10px; border-radius:6px; border:1px solid #3b82f6; background:#1e293b; color:white;
+      margin-bottom:10px; font-size:16px; width: 200px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="password-screen">
+  <h2>Enter Password</h2>
+  <input type="password" id="password-input" placeholder="Password">
+  <button onclick="checkPass()" style="width:100px;">Enter</button>
+  <p id="pass-error" style="color:red; display:none;">Incorrect Password</p>
+</div>
+<script>
+  function checkPass() {
+    // Simple password set to "cityu"
+    if(document.getElementById('password-input').value === 'cityu') {
+      document.getElementById('password-screen').style.display = 'none';
+      // Autoplay background audio or init can happen here if needed
+    } else {
+      document.getElementById('pass-error').style.display = 'block';
+    }
+  }
+</script>
+
+<div id="loading">Loading 3D Model...</div>
+
+<!-- Import map to resolve bare module specifiers used by three.js example modules -->
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.168/build/three.module.min.js"
+    }
+  }
+</script>
+
+<div id="ui">
+  <h1>CityU BOC Earthquake Survival</h1>
+  Season: <strong id="season-label">Summer (pool filled)</strong><br>
+  Wave: <select id="wave-select" style="margin-left:8px;padding:4px 6px;border-radius:6px;background:#1f2937;color:#e2e8f0;border:none;">
+    <option value="both">Both</option>
+    <option value="P">P-wave (vertical)</option>
+    <option value="S">S-wave (lateral)</option>
+  </select>
+  <br><br>
+
+  <div id="controls">
+    <button id="toggle-season">Toggle Season</button>
+    <button id="start-quake">Start Earthquake</button>
+    <button id="place-location">Place Selected</button>
+    <button id="save-positions">Save Positions</button>
+    <button id="auto-place">Auto Place</button>
+    <button id="reset">Reset</button>
+  </div>
+
+  <h3 style="margin:12px 0 6px;">Choose Location (1-8):</h3>
+  <div id="location-buttons"></div>
+
+  <div id="status">Click a number or button to choose your location, then start the earthquake.</div>
+</div>
+
+<script type="module">
+  import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.168/build/three.module.min.js';
+  import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.168/examples/jsm/controls/OrbitControls.min.js';
+  import { OBJLoader } from 'https://cdn.jsdelivr.net/npm/three@0.168/examples/jsm/loaders/OBJLoader.min.js';
+  import { MTLLoader } from 'https://cdn.jsdelivr.net/npm/three@0.168/examples/jsm/loaders/MTLLoader.min.js';
+
+  // ====================== SETUP ======================
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0f172a);
+  const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 2000);
+  camera.position.set(55, 50, 85);
+
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(devicePixelRatio);
+  document.body.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.target.set(0,10,0);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+  sun.position.set(80,120,60);
+  scene.add(sun);
+
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(500,500), new THREE.MeshStandardMaterial({color:0x1e293b}));
+  ground.rotation.x = -Math.PI/2;
+  ground.position.y = -0.2;
+  scene.add(ground);
+
+  // ====================== MODEL ======================
+  const modelGroup = new THREE.Group();
+  scene.add(modelGroup);
+
+  const loadingEl = document.getElementById('loading');
+  const statusEl = document.getElementById('status');
+  let loadedModel = null;
+  let placingZoneId = null;
+  const labels = {};
+    // Improved loading with progress and error messages for debugging
+    try {
+      const mtlLoader = new MTLLoader().setPath('./');
+      mtlLoader.load(
+        'Cityu bank of China model.mtl',
+        materials => {
+          materials.preload();
+          const objLoader = new OBJLoader().setMaterials(materials).setPath('./');
+          objLoader.load(
+            'Cityu bank of China model.obj',
+            obj => {
+              const box = new THREE.Box3().setFromObject(obj);
+              const center = box.getCenter(new THREE.Vector3());
+              const scale = 38 / Math.max(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z);
+              obj.position.sub(center);
+              obj.scale.setScalar(scale);
+                modelGroup.add(obj);
+                loadedModel = obj;
+
+                loadingEl.style.display = 'none';
+                statusEl.textContent = "Model loaded \u2713\nSelect a location (1-8) then click Start Earthquake";
+                console.log('Model loaded successfully');
+                // Try auto-placing zones immediately (best-effort). You can adjust manually.
+                try { autoPlaceZones(); statusEl.textContent = 'Model loaded ✓ — zones auto-placed. Adjust manually if needed.'; } catch (e) { console.warn('autoPlaceZones failed', e); }
+                // Frame the camera to the model so it's visible
+                try { frameModel(); } catch (e) { console.warn('frameModel failed', e); }
+
+              loadingEl.style.display = 'none';
+              statusEl.textContent = "Model loaded ✓\nSelect a location (1-8) then click Start Earthquake";
+              console.log('Model loaded successfully');
+              // Try auto-placing zones immediately (best-effort). You can adjust manually.
+              try { autoPlaceZones(); statusEl.textContent = 'Model loaded ✓ — zones auto-placed. Adjust manually if needed.'; } catch (e) { console.warn('autoPlaceZones failed', e); }
+            },
+            // onProgress for OBJ
+            xhr => {
+              try {
+                if (xhr && xhr.lengthComputable) {
+                  const pct = Math.round((xhr.loaded / xhr.total) * 100);
+                  loadingEl.textContent = `Loading 3D Model... ${pct}%`;
+                } else if (xhr && xhr.loaded) {
+                  loadingEl.textContent = `Loading 3D Model... ${(xhr.loaded/1024).toFixed(1)} KB`;
+                }
+              } catch (e) { /* ignore */ }
+            },
+            // onError for OBJ
+            err => {
+              console.error('OBJ load error', err);
+              loadingEl.textContent = "Failed to load model (OBJ). See console for details.";
+            }
+          );
+        },
+        // onProgress for MTL
+        xhr => {
+          try {
+            if (xhr && xhr.lengthComputable) {
+              const pct = Math.round((xhr.loaded / xhr.total) * 100);
+              loadingEl.textContent = `Loading materials... ${pct}%`;
+            }
+          } catch (e) { /* ignore */ }
+        },
+        // onError for MTL
+        err => {
+          console.error('MTL load error', err);
+          loadingEl.textContent = "Failed to load materials (MTL). See console for details.";
+        }
+      );
+    } catch (e) {
+      console.error('Unexpected loading error', e);
+      loadingEl.textContent = 'Unexpected error while starting model load. See console.';
+    }
+  // ====================== 8 LOCATIONS ======================
+  let isSummer = true;
+  let selectedZone = null;
+  let waveType = 'both';
+  let onlyP = false;
+
+  const locations = [
+    {id:1, name:"1. Swimming Pool Deck",     pos:[6,  2.5, 22], size:[20,4,13], summerRisk:"Low",    winterRisk:"Medium", base:"Open deck with almost no overhead collapse risk."},
+    {id:2, name:"2. Inside the Pool",        pos:[6,  0,   22], size:[17,3,10], summerRisk:"Very Low",winterRisk:"High",   base:"You are standing in the pool water."},
+    {id:3, name:"3. Main Entrance / Lobby",  pos:[-6, 4,    6], size:[12,8,12], summerRisk:"High",   winterRisk:"High",   base:"Glass doors, signage, and many people."},
+    {id:4, name:"4. Mid-Level Balcony",      pos:[0,  18,   8], size:[14,3,12], summerRisk:"Medium", winterRisk:"Medium", base:"Elevated balcony with railing."},
+    {id:5, name:"5. High Balcony / Terrace", pos:[3,  28,  10], size:[12,3,12], summerRisk:"High",   winterRisk:"High",   base:"Very high up with long drop."},
+    {id:6, name:"6. Base of Tall Tower",     pos:[14, 6,   -6], size:[18,10,14],summerRisk:"High",   winterRisk:"High",   base:"Structural base – heavy columns but surrounded by tall walls."},
+    {id:7, name:"7. Central Open Plaza",     pos:[-12,2,  -10], size:[26,4,22], summerRisk:"Medium", winterRisk:"Medium", base:"Large open paved area."},
+    {id:8, name:"8. Far Green Slope",        pos:[28, 1,   18], size:[20,4,18], summerRisk:"Low",    winterRisk:"Low",    base:"Natural open green area, farthest from buildings."}
+  ];
+
+  const clickable = [];
+
+  function makeNumberSprite(num) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64; canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(185, 28, 28, 0.9)';
+    ctx.beginPath(); ctx.arc(32,32,26,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 36px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(num, 32, 32);
+
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map: new THREE.CanvasTexture(canvas), transparent:true}));
+    sprite.scale.set(7,7,1);
+    return sprite;
+  }
+
+  locations.forEach(loc => {
+    const zone = new THREE.Mesh(
+      new THREE.BoxGeometry(...loc.size),
+      new THREE.MeshBasicMaterial({color:0x3b82f6, transparent:true, opacity:0.16})
+    );
+    zone.position.set(...loc.pos);
+    zone.userData = {...loc, originalOpacity: 0.16};
+    scene.add(zone);
+    clickable.push(zone);
+
+    // Number label
+    const label = makeNumberSprite(loc.id);
+    label.position.set(loc.pos[0], loc.pos[1] + loc.size[1]/2 + 5, loc.pos[2]);
+    scene.add(label);
+    labels[loc.id] = label;
+  });
+
+  // ====================== SELECTION ======================
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2();
+
+  function selectLocation(id) {
+    const zone = clickable.find(z => z.userData.id === id);
+    if (!zone) return;
+
+    // Reset previous
+    if (selectedZone) {
+      selectedZone.material.opacity = selectedZone.userData.originalOpacity;
+      selectedZone.material.color.set(0x3b82f6);
+    }
+
+    selectedZone = zone;
+    zone.material.color.set(0xffff00);
+    zone.material.opacity = 0.35;
+
+    statusEl.textContent = `Selected: ${zone.userData.name}\nClick "Start Earthquake"`;
+  }
+
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    pointer.x = (e.clientX / innerWidth) * 2 - 1;
+    pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+
+    // If placing a selected location, raycast against the loaded model
+    if (placingZoneId) {
+      if (!loadedModel) { statusEl.textContent = 'Model not loaded yet.'; return; }
+      const hits = raycaster.intersectObject(loadedModel, true);
+      if (hits.length) {
+        const p = hits[0].point;
+        const zone = clickable.find(z => z.userData.id === placingZoneId);
+        if (zone) {
+          const h = zone.userData.size[1] / 2;
+          zone.position.set(p.x, p.y + h, p.z);
+          const lbl = labels[placingZoneId];
+          if (lbl) lbl.position.set(p.x, p.y + zone.userData.size[1] / 2 + 5, p.z);
+          zone.userData.pos = [zone.position.x, zone.position.y, zone.position.z];
+          statusEl.textContent = `Placed: ${zone.userData.name}`;
+        }
+        placingZoneId = null;
+        return;
+      }
+    }
+
+    const intersects = raycaster.intersectObjects(clickable);
+    if (intersects.length) selectLocation(intersects[0].object.userData.id);
+  });
+
+  // Create UI buttons
+  const btnContainer = document.getElementById('location-buttons');
+  locations.forEach(loc => {
+    const btn = document.createElement('button');
+    btn.textContent = loc.name;
+    btn.onclick = () => selectLocation(loc.id);
+    btnContainer.appendChild(btn);
+  });
+
+  document.getElementById('place-location').onclick = () => {
+    if (!selectedZone) { statusEl.textContent = 'Select a location first (click a number button).'; return; }
+    placingZoneId = selectedZone.userData.id;
+    statusEl.textContent = `Click on the model to place: ${selectedZone.userData.name}`;
+  };
+
+  document.getElementById('save-positions').onclick = () => {
+    const out = {};
+    clickable.forEach(z => { out[z.userData.id] = { name: z.userData.name, pos: [z.position.x, z.position.y, z.position.z] }; });
+    const blob = new Blob([JSON.stringify(out, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'locations.json'; document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    statusEl.textContent = 'Saved positions to locations.json';
+  };
+
+  document.getElementById('auto-place').onclick = () => {
+    if (!loadedModel) { statusEl.textContent = 'Model not loaded yet.'; return; }
+    try { autoPlaceZones(); statusEl.textContent = 'Auto-placed zones. Adjust manually if needed.'; } catch (e) { console.error(e); statusEl.textContent = 'Auto-place failed. See console.'; }
+  };
+
+  // Best-effort mapping: map original `locations[*].pos` ranges onto the loaded model's bounding box
+  function autoPlaceZones() {
+    if (!loadedModel) throw new Error('No loaded model');
+    const srcXs = locations.map(l => l.pos[0]);
+    const srcZs = locations.map(l => l.pos[2]);
+    const srcYs = locations.map(l => l.pos[1]);
+    const srcMinX = Math.min(...srcXs), srcMaxX = Math.max(...srcXs);
+    const srcMinZ = Math.min(...srcZs), srcMaxZ = Math.max(...srcZs);
+    const srcMinY = Math.min(...srcYs), srcMaxY = Math.max(...srcYs);
+    const box = new THREE.Box3().setFromObject(loadedModel);
+    const tmin = box.min, tmax = box.max;
+    const dx = (srcMaxX - srcMinX) || 1;
+    const dz = (srcMaxZ - srcMinZ) || 1;
+    const dy = (srcMaxY - srcMinY) || 1;
+    clickable.forEach(z => {
+      const id = z.userData.id;
+      const loc = locations.find(l => l.id === id) || z.userData;
+      const nx = (loc.pos[0] - srcMinX) / dx;
+      const nz = (loc.pos[2] - srcMinZ) / dz;
+      const ny = (loc.pos[1] - srcMinY) / dy;
+      const tx = tmin.x + nx * (tmax.x - tmin.x);
+      const tz = tmin.z + nz * (tmax.z - tmin.z);
+      const ty = tmin.y + ny * (tmax.y - tmin.y) + (z.userData.size ? z.userData.size[1]/2 : 0);
+      z.position.set(tx, ty, tz);
+      const lbl = labels[id]; if (lbl) lbl.position.set(tx, ty + (z.userData.size ? z.userData.size[1]/2 + 5 : 5), tz);
+      z.userData.pos = [tx, ty, tz];
+    });
+  }
+
+  // Move camera to frame the loaded model
+  function frameModel() {
+    if (!loadedModel) return;
+    const box = new THREE.Box3().setFromObject(loadedModel);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = camera.fov * (Math.PI / 180);
+    let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+    cameraZ *= 1.5; // factor
+    camera.position.copy(center).add(new THREE.Vector3(cameraZ, cameraZ * 0.6, cameraZ));
+    controls.target.copy(center);
+    controls.update();
+  }
+
+  // ====================== EARTHQUAKE ======================
+  let quaking = false;
+  let quakeStartTime = 0;
+
+  function startQuake() {
+    if (!selectedZone) { statusEl.textContent = "Please choose a location first!"; return; }
+    quaking = true;
+    quakeStartTime = performance.now();
+    // If user selected S-wave only, skip the P-wave phase by offsetting start time
+    if (waveType === 'S') quakeStartTime -= 3000;
+    onlyP = (waveType === 'P');
+    statusEl.textContent = waveType === 'P' ? "P-wave demo: light vertical shaking" : (waveType === 'S' ? "S-wave demo: lateral shaking" : "P-wave arriving... (light vertical shaking)");
+  }
+
+  function generateOutcome() {
+    const data = selectedZone.userData;
+    // Adjust risk based on selected wave type: S-wave increases severity, P-wave slightly lessens it
+    const baseRisk = isSummer ? data.summerRisk : data.winterRisk;
+    function adjustRisk(risk, wave) {
+      const order = ['Very Low','Low','Medium','High'];
+      let idx = order.indexOf(risk);
+      if (idx === -1) return risk;
+      if (wave === 'S') idx = Math.min(order.length-1, idx + 1);
+      if (wave === 'P') idx = Math.max(0, idx - 1);
+      return order[idx];
+    }
+    const risk = adjustRisk(baseRisk, waveType);
+
+    let verdict = "";
+    if (risk === "Very Low") verdict = "EXCELLENT SURVIVAL CHOICE! You are very likely to come out unharmed.";
+    else if (risk === "Low") verdict = "GOOD CHOICE. Minimal risk of serious injury.";
+    else if (risk === "Medium") verdict = "MODERATE RISK. You will probably survive but may suffer injuries from debris.";
+    else verdict = "DANGEROUS LOCATION. High chance of serious injury or collapse.";
+
+    let extra = data.base + "\n";
+    if (data.name.includes("Pool")) {
+      if (isSummer) extra += "The water provides some cushioning but you must avoid being thrown against the edges.";
+      else extra += "The dry concrete pool offers no protection and can cause severe impact injuries.";
+    }
+
+    return `${verdict}\n\n${extra}\nRisk Level: ${risk} (${isSummer ? "Summer" : "Winter"})`;
+  }
+
+  function endQuake() {
+    quaking = false;
+    statusEl.innerHTML = "<strong>EARTHQUAKE OVER</strong>\n\n" + generateOutcome();
+  }
+
+  document.getElementById('start-quake').onclick = startQuake;
+  document.getElementById('reset').onclick = () => location.reload();
+  document.getElementById('toggle-season').onclick = () => {
+    isSummer = !isSummer;
+    document.getElementById('season-label').textContent = isSummer ? "Summer (pool filled)" : "Winter (pool dry)";
+  };
+
+  // Wave selection handling
+  document.getElementById('wave-select').onchange = (e) => {
+    waveType = e.target.value;
+    onlyP = (waveType === 'P');
+    statusEl.textContent = `Wave mode: ${waveType}`;
+  };
+
+  // ====================== ANIMATION LOOP ======================
+  function animate(now) {
+    requestAnimationFrame(animate);
+
+    if (quaking) {
+      const t = now - quakeStartTime;
+      if (t < 2800) {
+        modelGroup.position.y = Math.sin(t * 0.022) * 0.6;           // P-wave
+      } else if (t < 8500) {
+        const f = (isSummer ? selectedZone.userData.summerRisk : selectedZone.userData.winterRisk) === "Very Low" ? 0.6 :
+                  (isSummer ? selectedZone.userData.summerRisk : selectedZone.userData.winterRisk) === "Low" ? 0.9 : 1.9;
+        modelGroup.position.x = Math.sin(t * 0.0017) * 1.6 * f;
+        modelGroup.position.z = Math.cos(t * 0.0014) * 1.4 * f;
+        modelGroup.rotation.z = Math.sin(t * 0.0011) * 0.06 * f;
+      } else {
+        endQuake();
+      }
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate(performance.now());
+
+  window.addEventListener('resize', () => {
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+</script>
+</body>
+</html>
